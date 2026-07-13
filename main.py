@@ -12,6 +12,8 @@ from ui.style import APP_STYLESHEET
 def main() -> None:
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLESHEET)
+    # 트레이 아이콘으로 최소화하는 창이 있으므로, 창을 숨겨도 앱이 종료되지 않게 한다.
+    app.setQuitOnLastWindowClosed(False)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

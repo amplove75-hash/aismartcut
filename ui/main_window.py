@@ -1,10 +1,10 @@
-"""AI 스마트 캡처 메인 윈도우 (4단계: 기본 캡처 + 저장/클립보드 + OCR + AI 분석)."""
+"""AI 스마트 캡처 메인 윈도우 (기본 캡처 + 저장/클립보드 + OCR + AI 분석 + 트레이/전역 단축키)."""
 from __future__ import annotations
 
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication, QKeySequence, QPixmap
+from PySide6.QtGui import QCloseEvent, QGuiApplication, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -14,12 +14,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStatusBar,
+    QSystemTrayIcon,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ai.image_analyzer import AiNotConfiguredError, ImageAnalyzer
+from capture.hotkey_manager import GlobalHotkeyManager
 from capture.overlay import CaptureOverlay
 from capture.screen_capture import grab_primary_screen
 from ocr.ocr_engine import OcrEngine, OcrNotAvailableError
@@ -34,22 +36,26 @@ from storage.file_manager import (
 from ui.ai_panel import AiAnalysisPanel
 from ui.ocr_panel import OcrPanel
 from ui.preview_widget import PreviewWidget
+from ui.tray_icon import TrayIcon, build_app_icon
 
 
 class MainWindow(QMainWindow):
-    """4단계(기본 캡처 + 저장/클립보드 + OCR + AI 분석) 앱의 메인 윈도우."""
+    """6단계 일부(트레이 아이콘 + 전역 단축키)까지 포함한 메인 윈도우."""
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(
-            "AI 스마트 캡처 - 4단계 (기본 캡처 + 저장/클립보드 + OCR + AI 분석)"
+            "AI 스마트 캡처 - 기본 캡처 + 저장/클립보드 + OCR + AI 분석 + 트레이/단축키"
         )
+        self.setWindowIcon(build_app_icon())
         self.resize(1280, 720)
 
         self._overlay: CaptureOverlay | None = None
         self._last_save_dir = str(Path.home())
         self._ocr_engine = OcrEngine()
         self._ai_analyzer = ImageAnalyzer()
+        self._tray_notice_shown = False
+        self._quitting = False
 
         self._preview = PreviewWidget()
         self._ocr_panel = OcrPanel()
@@ -119,6 +125,78 @@ class MainWindow(QMainWindow):
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("준비 완료 - 영역 캡처 또는 전체 화면 캡처를 눌러주세요.")
+
+        self._setup_tray_icon()
+        self._setup_global_hotkeys()
+
+    def _setup_tray_icon(self) -> None:
+        """시스템 트레이 아이콘과 메뉴(열기/캡처/종료)를 구성한다."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self._tray_icon = None
+            return
+
+        self._tray_icon = TrayIcon(self)
+        self._tray_icon.open_action.triggered.connect(self._restore_from_tray)
+        self._tray_icon.region_capture_action.triggered.connect(self._start_region_capture)
+        self._tray_icon.fullscreen_capture_action.triggered.connect(self._capture_fullscreen)
+        self._tray_icon.quit_action.triggered.connect(self._quit_app)
+        self._tray_icon.activated.connect(self._on_tray_activated)
+        self._tray_icon.show()
+
+    def _setup_global_hotkeys(self) -> None:
+        """전역 단축키(Ctrl+Alt+S / Ctrl+Alt+F)를 등록한다."""
+        self._hotkey_manager = GlobalHotkeyManager()
+        self._hotkey_manager.region_capture_requested.connect(self._start_region_capture)
+        self._hotkey_manager.fullscreen_capture_requested.connect(self._capture_fullscreen)
+        registered = self._hotkey_manager.start()
+        if registered:
+            self.statusBar().showMessage(
+                f"전역 단축키 등록 완료 (영역: {self._hotkey_manager.region_hotkey}, "
+                f"전체화면: {self._hotkey_manager.fullscreen_hotkey})",
+                5000,
+            )
+        else:
+            self.statusBar().showMessage(
+                "전역 단축키 등록 실패 - 'keyboard' 패키지 설치 여부나 관리자 권한을 확인해주세요.",
+                5000,
+            )
+
+    def _restore_from_tray(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._restore_from_tray()
+
+    def _quit_app(self) -> None:
+        """트레이 메뉴의 '종료'를 눌렀을 때 실제로 앱을 완전히 끝낸다."""
+        self._quitting = True
+        self._hotkey_manager.stop()
+        if self._tray_icon is not None:
+            self._tray_icon.hide()
+        QApplication.instance().quit()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """창 닫기(X) 버튼을 누르면 종료하지 않고 트레이로 최소화한다."""
+        if self._quitting or self._tray_icon is None:
+            event.accept()
+            return
+
+        event.ignore()
+        self.hide()
+        if not self._tray_notice_shown:
+            self._tray_icon.showMessage(
+                "AI 스마트 캡처",
+                "트레이로 최소화되었습니다. 완전히 종료하려면 트레이 아이콘에서 '종료'를 선택하세요.",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
+            self._tray_notice_shown = True
 
     def _start_region_capture(self) -> None:
         """드래그로 캡처할 영역을 선택하는 오버레이를 띄운다."""

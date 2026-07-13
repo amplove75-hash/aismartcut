@@ -4,7 +4,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from PySide6.QtCore import QBuffer, QIODevice
 from PySide6.QtGui import QPixmap
@@ -63,7 +65,7 @@ class ImageAnalyzer:
         try:
             from dotenv import load_dotenv
 
-            load_dotenv()
+            load_dotenv(_dotenv_path())
         except ImportError:
             pass  # python-dotenv가 없으면 시스템 환경변수만 사용한다.
 
@@ -117,6 +119,19 @@ class ImageAnalyzer:
             )
 
         return result
+
+
+def _dotenv_path() -> Path:
+    """실행 파일(또는 소스 코드) 옆에 있는 .env 경로를 반환한다.
+
+    PyInstaller로 패키징한 EXE에서는 현재 작업 폴더가 프로젝트 폴더와 다를 수 있으므로,
+    `sys.executable`(EXE 위치) 기준으로 .env를 찾아야 한다.
+    """
+    if getattr(sys, "frozen", False):
+        base_dir = Path(sys.executable).resolve().parent
+    else:
+        base_dir = Path(__file__).resolve().parent.parent
+    return base_dir / ".env"
 
 
 def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float | None:

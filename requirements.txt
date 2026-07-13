@@ -3,3 +3,4 @@ Pillow>=10.0
 pytesseract>=0.3.10
 openai>=1.30
 python-dotenv>=1.0
+keyboard>=0.13
