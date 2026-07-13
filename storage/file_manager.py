@@ -38,6 +38,24 @@ def save_pixmap(pixmap: QPixmap, file_path: str) -> Path:
     return path
 
 
+def save_text(text: str, file_path: str) -> Path:
+    """텍스트를 TXT 파일로 저장한다. 확장자가 없으면 .txt를 붙인다.
+
+    Raises:
+        SaveError: 저장에 실패한 경우.
+    """
+    path = Path(file_path)
+    if path.suffix.lower() != ".txt":
+        path = path.with_suffix(".txt")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        raise SaveError(f"텍스트를 저장하지 못했습니다: {path}") from exc
+    return path
+
+
 def copy_to_clipboard(pixmap: QPixmap) -> None:
     """픽스맵을 시스템 클립보드로 복사한다."""
     clipboard: QClipboard = QGuiApplication.clipboard()
