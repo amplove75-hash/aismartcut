@@ -1,4 +1,4 @@
-"""AI 스마트 캡처 메인 윈도우 (3단계: 기본 캡처 + 저장/클립보드 + OCR)."""
+"""AI 스마트 캡처 메인 윈도우 (4단계: 기본 캡처 + 저장/클립보드 + OCR + AI 분석)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,10 +14,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from ai.image_analyzer import AiNotConfiguredError, ImageAnalyzer
 from capture.overlay import CaptureOverlay
 from capture.screen_capture import grab_primary_screen
 from ocr.ocr_engine import OcrEngine, OcrNotAvailableError
@@ -29,24 +31,33 @@ from storage.file_manager import (
     save_pixmap,
     save_text,
 )
+from ui.ai_panel import AiAnalysisPanel
 from ui.ocr_panel import OcrPanel
 from ui.preview_widget import PreviewWidget
 
 
 class MainWindow(QMainWindow):
-    """3단계(기본 캡처 + 저장/클립보드 + OCR) 앱의 메인 윈도우."""
+    """4단계(기본 캡처 + 저장/클립보드 + OCR + AI 분석) 앱의 메인 윈도우."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("AI 스마트 캡처 - 3단계 (기본 캡처 + 저장/클립보드 + OCR)")
-        self.resize(1200, 700)
+        self.setWindowTitle(
+            "AI 스마트 캡처 - 4단계 (기본 캡처 + 저장/클립보드 + OCR + AI 분석)"
+        )
+        self.resize(1280, 720)
 
         self._overlay: CaptureOverlay | None = None
         self._last_save_dir = str(Path.home())
         self._ocr_engine = OcrEngine()
+        self._ai_analyzer = ImageAnalyzer()
 
         self._preview = PreviewWidget()
         self._ocr_panel = OcrPanel()
+        self._ai_panel = AiAnalysisPanel()
+
+        self._result_tabs = QTabWidget()
+        self._result_tabs.addTab(self._ocr_panel, "OCR 결과")
+        self._result_tabs.addTab(self._ai_panel, "AI 분석 결과")
 
         self._region_btn = QPushButton("영역 캡처")
         self._fullscreen_btn = QPushButton("전체 화면 캡처")
@@ -54,6 +65,7 @@ class MainWindow(QMainWindow):
         self._copy_btn = QPushButton("복사")
         self._paste_btn = QPushButton("붙여넣기")
         self._ocr_btn = QPushButton("OCR 실행")
+        self._ai_btn = QPushButton("AI 분석 실행")
         self._zoom_in_btn = QPushButton("확대 (+)")
         self._zoom_out_btn = QPushButton("축소 (-)")
         self._zoom_reset_btn = QPushButton("100%")
@@ -67,12 +79,14 @@ class MainWindow(QMainWindow):
         self._copy_btn.clicked.connect(self._copy_current_image)
         self._paste_btn.clicked.connect(self._paste_from_clipboard)
         self._ocr_btn.clicked.connect(self._run_ocr)
+        self._ai_btn.clicked.connect(self._run_ai_analysis)
         self._zoom_in_btn.clicked.connect(self._preview.zoom_in)
         self._zoom_out_btn.clicked.connect(self._preview.zoom_out)
         self._zoom_reset_btn.clicked.connect(self._preview.zoom_reset)
 
         self._ocr_panel.copy_btn.clicked.connect(self._copy_ocr_text)
         self._ocr_panel.save_txt_btn.clicked.connect(self._save_ocr_text)
+        self._ai_panel.copy_search_terms_btn.clicked.connect(self._copy_ai_search_terms)
 
         capture_row = QHBoxLayout()
         capture_row.addWidget(self._region_btn)
@@ -84,6 +98,7 @@ class MainWindow(QMainWindow):
         edit_row.addWidget(self._save_btn)
         edit_row.addWidget(self._copy_btn)
         edit_row.addWidget(self._ocr_btn)
+        edit_row.addWidget(self._ai_btn)
         edit_row.addStretch(1)
         edit_row.addWidget(self._zoom_out_btn)
         edit_row.addWidget(self._zoom_reset_btn)
@@ -91,7 +106,7 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._preview)
-        splitter.addWidget(self._ocr_panel)
+        splitter.addWidget(self._result_tabs)
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 1)
 
@@ -212,6 +227,7 @@ class MainWindow(QMainWindow):
 
         text = "\n".join(line.text for line in lines)
         self._ocr_panel.set_text(text)
+        self._result_tabs.setCurrentWidget(self._ocr_panel)
         self.statusBar().showMessage(f"OCR 인식 완료 ({len(lines)}줄)", 5000)
 
     def _copy_ocr_text(self) -> None:
@@ -245,3 +261,43 @@ class MainWindow(QMainWindow):
 
         self._last_save_dir = str(saved_path.parent)
         self.statusBar().showMessage(f"OCR 텍스트 저장 완료: {saved_path}", 5000)
+
+    def _run_ai_analysis(self) -> None:
+        """현재 미리보기 이미지를 AI로 분석해 설명/키워드/추천 검색어를 얻는다."""
+        pixmap = self._preview.current_pixmap
+        if pixmap is None:
+            QMessageBox.information(self, "AI 분석", "분석할 캡처 이미지가 없습니다.")
+            return
+
+        self.statusBar().showMessage("AI 분석 중입니다... (API 응답까지 몇 초 걸릴 수 있어요)")
+        QApplication.processEvents()
+
+        try:
+            result = self._ai_analyzer.analyze(pixmap)
+        except AiNotConfiguredError as exc:
+            QMessageBox.warning(self, "AI 분석 오류", str(exc))
+            self.statusBar().showMessage("AI 분석 실패", 5000)
+            return
+        except Exception as exc:  # noqa: BLE001 - API 예외를 그대로 사용자에게 안내
+            QMessageBox.warning(self, "AI 분석 오류", f"AI 분석 중 오류가 발생했습니다: {exc}")
+            self.statusBar().showMessage("AI 분석 실패", 5000)
+            return
+
+        self._ai_panel.set_result(result.description, result.keywords, result.search_terms)
+        self._ai_panel.set_usage(
+            result.input_tokens,
+            result.output_tokens,
+            result.total_tokens,
+            result.estimated_cost_usd,
+        )
+        self._result_tabs.setCurrentWidget(self._ai_panel)
+        self.statusBar().showMessage("AI 분석 완료", 5000)
+
+    def _copy_ai_search_terms(self) -> None:
+        """AI가 추천한 검색어를 클립보드로 복사한다."""
+        text = self._ai_panel.search_terms_text()
+        if not text.strip():
+            QMessageBox.information(self, "복사", "복사할 추천 검색어가 없습니다.")
+            return
+        QGuiApplication.clipboard().setText(text)
+        self.statusBar().showMessage("추천 검색어를 클립보드로 복사했습니다.", 3000)
